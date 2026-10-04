@@ -1,0 +1,15 @@
+.venv/
+.python/
+.tools/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+db.sqlite3
+.route_cache/
+.osrm_rate_limit.lock
+.DS_Store
+us_boundary_preview.jpg
+.agents/
+.aws/
+.codex/
