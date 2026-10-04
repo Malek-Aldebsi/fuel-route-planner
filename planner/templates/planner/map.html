@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fuel route planner</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #14212d; background: #f4f7f7; }
+    body { margin: 0; }
+    header { background: #103d42; color: white; padding: 20px max(20px, calc((100vw - 1200px)/2)); }
+    h1 { margin: 0 0 4px; font-size: 25px; }
+    header p { margin: 0; color: #c6e4df; }
+    main { max-width: 1200px; margin: 22px auto; padding: 0 20px; }
+    form { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 16px; }
+    label { display: grid; gap: 5px; font-weight: 600; }
+    input { padding: 10px 12px; border: 1px solid #bdccca; border-radius: 7px; font: inherit; width: 240px; }
+    button { padding: 11px 18px; background: #087d70; color: white; border: 0; border-radius: 7px; font: inherit; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    #message { min-height: 23px; margin: 8px 0; }
+    #map { height: 62vh; min-height: 420px; border-radius: 9px; border: 1px solid #cad8d5; background: #e5edf0; }
+    #summary { display: flex; gap: 20px; flex-wrap: wrap; margin: 17px 0; font-size: 18px; font-weight: 700; }
+    #stops { padding-left: 22px; }
+    #stops li { margin: 8px 0; }
+    .endpoint-label { color: #103d42; font-weight: 700; }
+    .note { color: #50626b; font-size: 14px; }
+    a { color: #087d70; }
+  </style>
+</head>
+<body>
+<header><h1>Fuel route planner</h1><p>US driving route and cost aware fuel stops</p></header>
+<main>
+  <form id="form">
+    <label>Start <input id="start" value="Chicago, IL" required></label>
+    <label>Finish <input id="finish" value="Dallas, TX" required></label>
+    <button id="go" type="submit">Plan route</button>
+  </form>
+  <div id="message" role="status"></div>
+  <div id="map"></div>
+  <div id="summary"></div>
+  <ol id="stops"></ol>
+  <p class="note">Fuel cost covers fuel bought during the trip; starting fuel and detours are excluded.</p>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map', {minZoom: 2}).setView([39, -97], 4);
+L.tileLayer('https://tile.openstreetmap.de/{z}/{x}/{y}.png', {
+  maxZoom: 18,
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> · <a href="https://www.geonames.org/">GeoNames</a> · <a href="https://www.openstreetmap.org/fixthemap">Fix the map</a>'
+}).addTo(map);
+function showStatus(value) {
+  document.getElementById('message').textContent = value;
+}
+const routeGroup = L.featureGroup().addTo(map);
+const form = document.getElementById('form');
+const summary = document.getElementById('summary');
+const stops = document.getElementById('stops');
+const params = new URLSearchParams(window.location.search);
+if (params.has('start')) document.getElementById('start').value = params.get('start');
+if (params.has('finish')) document.getElementById('finish').value = params.get('finish');
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = document.getElementById('go');
+  button.disabled = true;
+  showStatus('Planning route…');
+  summary.replaceChildren();
+  stops.replaceChildren();
+  routeGroup.clearLayers();
+  const start = document.getElementById('start').value;
+  const finish = document.getElementById('finish').value;
+  try {
+    const response = await fetch('/api/route/', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({start, finish})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not plan route');
+    history.replaceState(null, '', '/map/?' + new URLSearchParams({start, finish}));
+    L.geoJSON(data.map, {
+      style: () => ({color: '#087d70', weight: 5}),
+      pointToLayer: (feature, latlng) => L.circleMarker(latlng, {radius: 8, color: '#103d42', fillColor: '#f9b234', fillOpacity: 1}),
+      onEachFeature: (feature, layer) => {
+        if (feature.properties.kind === 'fuel_stop') {
+          const stop = data.fuel_stops.find(stop => stop.station_id === feature.properties.station_id);
+          const popup = document.createElement('span');
+          popup.textContent = `Fuel stop #${stop.station_id} · ${stop.name}`;
+          layer.bindPopup(popup);
+        }
+      }
+    }).addTo(routeGroup);
+    L.circleMarker([data.start.latitude, data.start.longitude], {
+      radius: 7, color: '#103d42', weight: 3, fillColor: 'white', fillOpacity: 1
+    }).bindTooltip('Start', {permanent: true, direction: 'top', className: 'endpoint-label'}).addTo(routeGroup);
+    L.circleMarker([data.finish.latitude, data.finish.longitude], {
+      radius: 7, color: '#103d42', weight: 3, fillColor: '#e56b43', fillOpacity: 1
+    }).bindTooltip('Finish', {permanent: true, direction: 'top', className: 'endpoint-label'}).addTo(routeGroup);
+    map.fitBounds(routeGroup.getBounds(), {padding: [20, 20]});
+    summary.textContent = `${data.distance_miles} miles · ${data.fuel_stops.length} fuel stops · $${data.total_fuel_cost_usd.toFixed(2)} spent en route`;
+    for (const stop of data.fuel_stops) {
+      const li = document.createElement('li');
+      li.textContent = `${stop.name} (${stop.city}, ${stop.state}) — about ${stop.mile_marker} miles from the start. Buy ${stop.gallons_purchased} gal at $${stop.price_per_gallon_usd}/gal for $${stop.cost_usd.toFixed(2)}.`;
+      stops.appendChild(li);
+    }
+    showStatus(data.routing.cache_hit ? 'Loaded from route cache.' : 'Planned with one routing request.');
+  } catch (error) {
+    showStatus(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+if (params.has('start') && params.has('finish')) form.requestSubmit();
+</script>
+</body>
+</html>
