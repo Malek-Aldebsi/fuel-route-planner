@@ -14,7 +14,11 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from functools import lru_cache
 from pathlib import Path
-import fcntl
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 from django.core.cache import cache
 
@@ -225,7 +229,11 @@ def route_between(start, finish):
     # concurrent misses for the same route from duplicating requests.
     lock_path = ROOT / ".osrm_rate_limit.lock"
     with lock_path.open("a+", encoding="ascii") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        if os.name == "nt":
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
         cached = cache.get(cache_key)
         if cached is not None:
             return cached, True
